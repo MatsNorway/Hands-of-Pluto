@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>2D Hand Typing Simulator</title>
+<style>
+  :root {
+    --bg:#10151d;
+    --panel:#171e28;
+    --panel2:#1d2632;
+    --key:#293442;
+    --text:#e8eef6;
+    --muted:#91a0b3;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; min-height:100vh; background:var(--bg); color:var(--text);
+    font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;
+    display:flex; justify-content:center;
+  }
+  .app { width:min(1450px,100%); padding:20px; }
+  h1 { margin:0 0 4px; font-size:22px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:14px; }
+  .toolbar {
+    display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+    background:var(--panel); border:1px solid #283342; border-radius:12px;
+    padding:12px 14px; margin-bottom:12px;
+  }
+  textarea {
+    flex:1 1 420px; min-height:42px; resize:vertical; border-radius:8px;
+    border:1px solid #344253; background:#0f141b; color:var(--text);
+    padding:10px 12px; font:inherit;
+  }
+  button, input[type=number] {
+    border:1px solid #3a4a5e; background:var(--panel2); color:var(--text);
+    border-radius:8px; padding:9px 12px; font:inherit;
+  }
+  button { cursor:pointer; }
+  button:hover { background:#263445; }
+  label { color:var(--muted); font-size:12px; }
+  .speed { display:flex; flex-direction:column; gap:4px; }
+  #speed { width:100px; }
+  .stage {
+    background:radial-gradient(circle at 50% 45%,#1a2430 0,#111821 60%,#0d1218 100%);
+    border:1px solid #283342; border-radius:14px; overflow:hidden;
+  }
+  canvas { display:block; width:100%; height:auto; }
+  .status {
+    display:flex; justify-content:space-between; gap:10px; margin-top:10px;
+    color:var(--muted); font-size:12px;
+  }
+  .pill { background:var(--panel); border:1px solid #283342; padding:5px 9px; border-radius:99px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>2D Hand Typing Simulator</h1>
+  <div class="sub">Continuous Index Reach (5,6,7,8) · Balanced Middle Finger Scale</div>
+
+  <div class="toolbar">
+    <textarea id="text" placeholder="Type something...">!"#¤%&>/()=</textarea>
+    <div class="speed">
+      <label for="speed">Movement speed ×</label>
+      <input id="speed" type="number" min="0.01" step="0.1" value="1">
+    </div>
+    <button id="play">Play</button>
+    <button id="stop">Stop</button>
+    <button id="reset">Reset</button>
+  </div>
+
+  <div class="stage">
+    <canvas id="canvas" width="1400" height="840"></canvas>
+  </div>
+
+  <div class="status">
+    <span class="pill" id="current">Ready</span>
+    <span class="pill">Pinky: Holds SHIFT</span>
+    <span class="pill">Middle: !"#¤ (Keys 1-4)</span>
+    <span class="pill">Index: %&>/ (Keys 5-8 + Rotation)</span>
+    <span class="pill">Thumb: ()= (Keys 9-0-)</span>
+  </div>
+</div>
+
+<script>
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
+const textEl=document.getElementById('text');
+const speedEl=document.getElementById('speed');
+const currentEl=document.getElementById('current');
+
+const W=canvas.width,H=canvas.height;
+const baseKeyW=50,keyH=50,gap=5;
+const keyboardX=40,keyboardY=170;
+const fingerColors=['#8f78ff','#55d889','#ffc34d','#52c7ff','#ff6b78'];
+const fingerFillColors=['rgba(143,120,255,0.25)','rgba(85,216,137,0.25)','rgba(255,195,77,0.25)','rgba(82,199,255,0.25)','rgba(255,107,120,0.25)'];
+
+const keyMap={},drawKeyList=[];
+
+function addRow(items,row,offset){
+  let x=keyboardX+(offset||0);
+  items.forEach(it=>{
+    const w=baseKeyW*it.w;
+    const y=keyboardY+row*(keyH+gap);
+    const d={key:it.k,label:it.label||it.k.toUpperCase(),subLabel:it.subLabel||'',x,y,w,h:keyH};
+    keyMap[it.k]=d;
+    drawKeyList.push(d);
+    x+=w+gap;
+  });
+}
+
+addRow([
+  {k:'esc',label:'Esc',w:1},{k:'f1',label:'F1',w:1},{k:'f2',label:'F2',w:1},
+  {k:'f3',label:'F3',w:1},{k:'f4',label:'F4',w:1},{k:'f5',label:'F5',w:1},
+  {k:'f6',label:'F6',w:1},{k:'f7',label:'F7',w:1},{k:'f8',label:'F8',w:1},
+  {k:'f9',label:'F9',w:1},{k:'f10',label:'F10',w:1},{k:'f11',label:'F11',w:1},
+  {k:'f12',label:'F12',w:1},{k:'backspace',label:'Backspace',w:2}
+],0,0);
+
+addRow([
+  {k:'`',label:'½',subLabel:'§',w:1},
+  {k:'1',label:'1',subLabel:'!',w:1},
+  {k:'2',label:'2',subLabel:'"',w:1},
+  {k:'3',label:'3',subLabel:'#',w:1},
+  {k:'4',label:'4',subLabel:'¤',w:1},
+  {k:'5',label:'5',subLabel:'%',w:1},
+  {k:'6',label:'6',subLabel:'&',w:1},
+  {k:'7',label:'7',subLabel:'>',w:1},
+  {k:'8',label:'8',subLabel:'/',w:1},
+  {k:'9',label:'9',subLabel:'(',w:1},
+  {k:'0',label:'0',subLabel:')',w:1},
+  {k:'-',label:'-',subLabel:'=',w:1},
+  {k:'=',label:'`',subLabel:'´',w:1},
+  {k:'backspace',label:'Backspace',w:2}
+],1,0);
+
+addRow([
+  {k:'tab',label:'Tab',w:1.5},{k:'q',w:1},{k:'w',w:1},{k:'e',w:1},{k:'r',w:1},{k:'t',w:1},
+  {k:'y',w:1},{k:'u',w:1},{k:'i',w:1},{k:'o',w:1},{k:'p',w:1},{k:'[',label:'Å',w:1},{k:']',label:'¨',w:1},{k:'\\',w:1}
+],2,0);
+addRow([
+  {k:'caps',label:'Caps Lock',w:1.75},{k:'a',w:1},{k:'s',w:1},{k:'d',w:1},{k:'f',w:1},{k:'g',w:1},
+  {k:'h',w:1},{k:'j',w:1},{k:'k',w:1},{k:'l',w:1},{k:';',label:'Æ',w:1},{k:"'",label:'Ø',w:1},{k:'enter',label:'Enter',w:2}
+],3,0);
+addRow([
+  {k:'shift',label:'Shift',w:2.2},{k:'z',w:1},{k:'x',w:1},{k:'c',w:1},{k:'v',w:1},{k:'b',w:1},
+  {k:'n',w:1},{k:'m',w:1},{k:',',w:1},{k:'.',w:1},{k:'/',label:'-',w:1},{k:'shift_r',label:'Shift',w:2.2}
+],4,0);
+addRow([
+  {k:'ctrl',label:'Ctrl',w:1.5},{k:'win',label:'Win',w:1.2},{k:'alt',label:'Alt',w:1.25},
+  {k:'space',label:'SPACE',w:6.2},{k:'alt_r',label:'Alt Gr',w:1.25},{k:'win_r',label:'Win',w:1.2},
+  {k:'menu',label:'Menu',w:1.2},{k:'ctrl_r',label:'Ctrl',w:1.5}
+],5,0);
+
+function center(code){
+  const p=keyMap[String(code).toLowerCase()]||keyMap.space;
+  return {x:p.x+p.w/2,y:p.y+p.h/2};
+}
+
+// PROPORTIONALLY RESCALED MIDDLE FINGER: L reduced from [132,82,54] -> [118,72,46], width 15.5
+const S=[
+  {bOffset:{x:90,y:60},L:[105,72],rest:{x:350,y:480},w:18},       // Thumb (0)
+  {bOffset:{x:42,y:-68},L:[118,74,50],rest:'d',w:16},          // Index (1)
+  {bOffset:{x:0,y:-70},L:[118,72,46],rest:'w',w:15.5},         // Middle (2)
+  {bOffset:{x:-42,y:-58},L:[114,72,48],rest:'a',w:15},         // Ring (3)
+  {bOffset:{x:-88,y:-30},L:[92,58,42],rest:'shift',w:14}       // Pinky (4)
+];
+const fingerNames=['thumb','index','middle','ring','pinky'];
+const hand={
+  pivot:{x:215,y:570},
+  off:{x:0,y:0},
+  goal:{x:0,y:0},
+  angle:0,
+  goalAngle:0
+};
+const down=new Set();
+
+const F=S.map(s=>{
+  const f={...s,rest:typeof s.rest==='string'?center(s.rest):{...s.rest}};
+  f.tip={...f.rest};
+  f.heightOffset = 0;
+  f.sum=f.L.reduce((a,b)=>a+b,0);
+  f.pts=[{x:0,y:0}];
+  let accumL=0;
+  f.L.forEach(l=>{
+    accumL+=l;
+    f.pts.push({x:accumL, y:0});
+  });
+  return f;
+});
+
+function getRigidBase(f){
+  const cx = hand.pivot.x + hand.off.x;
+  const cy = hand.pivot.y + hand.off.y;
+  const cos = Math.cos(hand.angle);
+  const sin = Math.sin(hand.angle);
+  return {
+    x: cx + f.bOffset.x * cos - f.bOffset.y * sin,
+    y: cy + f.bOffset.x * sin + f.bOffset.y * cos
+  };
+}
+
+function solvePlanar(f, target, fIdx){
+  const b = getRigidBase(f);
+  const n = f.L.length;
+  
+  if (fIdx === 0) {
+    const dx = target.x - b.x, dy = target.y - b.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const effSum = Math.min(dist, f.sum);
+    const angle = Math.atan2(dy, dx);
+    
+    f.pts[0] = { x: b.x, y: b.y };
+    f.pts[1] = { x: b.x + Math.cos(angle) * (f.L[0] * (effSum / f.sum)), y: b.y + Math.sin(angle) * (f.L[0] * (effSum / f.sum)) };
+    f.pts[2] = { x: b.x + Math.cos(angle) * effSum, y: b.y + Math.sin(angle) * effSum };
+    return;
+  }
+
+  const dy = target.y - b.y;
+  const dx = target.x - b.x;
+
+  const reachAngle = Math.atan2(dy, dx);
+  const reachLength = Math.min(f.sum, Math.hypot(dx, dy));
+  
+  f.pts[0] = { x: b.x, y: b.y };
+  let currentDist = 0;
+  for (let j = 0; j < n; j++) {
+    const segRatio = f.L[j] / f.sum;
+    currentDist += reachLength * segRatio;
+    f.pts[j + 1] = {
+      x: b.x + Math.cos(reachAngle) * currentDist,
+      y: b.y + Math.sin(reachAngle) * currentDist
+    };
+  }
+}
+
+function applyCrossGuards() {
+  const minSpacing = 12;
+  const indexTip = F[1].pts[F[1].pts.length - 1];
+  const middleTip = F[2].pts[F[2].pts.length - 1];
+  if (indexTip.x < middleTip.x + minSpacing) {
+    indexTip.x = middleTip.x + minSpacing;
+  }
+
+  for (let i = 4; i >= 2; i--) {
+    const rightTip = F[i - 1].pts[F[i - 1].pts.length - 1];
+    const leftTip = F[i].pts[F[i].pts.length - 1];
+    if (leftTip.x > rightTip.x - minSpacing) {
+      leftTip.x = rightTip.x - minSpacing;
+    }
+  }
+}
+
+F.forEach((f, i)=>solvePlanar(f, f.rest, i));
+
+// ROUTING FIX: Index handles keys 5, 6, 7, 8 (% & > /) continuously
+function resolveKeyAndFinger(ch) {
+  switch(ch) {
+    case '!': return { code: '1', finger: 2, mod: 'shift' };
+    case '"': return { code: '2', finger: 2, mod: 'shift' };
+    case '#': return { code: '3', finger: 2, mod: 'shift' };
+    case '¤': return { code: '4', finger: 2, mod: 'shift' };
+
+    case '%': return { code: '5', finger: 1, mod: 'shift', rotateCCW: true };
+    case '&': return { code: '6', finger: 1, mod: 'shift', rotateCCW: true };
+    case '>': return { code: '7', finger: 1, mod: 'shift', rotateCCW: true };
+    case '/': return { code: '8', finger: 1, mod: 'shift', rotateCCW: true };
+
+    case '(': return { code: '9', finger: 0, mod: 'shift', rotateCW: true };
+    case ')': return { code: '0', finger: 0, mod: 'shift', rotateCW: true };
+    case '=': return { code: '-', finger: 0, mod: 'shift', rotateCW: true };
+
+    default: return null;
+  }
+}
+
+function parseSequence(t){
+  const out=[];
+  let i=0;
+  while(i<t.length){
+    const ch = t[i];
+    const custom = resolveKeyAndFinger(ch);
+    if (custom) {
+      out.push({ 
+        mods: custom.mod ? [custom.mod] : [], 
+        code: custom.code, 
+        finger: custom.finger, 
+        rotateCCW: custom.rotateCCW, 
+        rotateCW: custom.rotateCW, 
+        label: ch 
+      });
+      i++;
+      continue;
+    }
+    
+    const l = ch.toLowerCase();
+    if (keyMap[l]) {
+      let fIdx = 1;
+      if (['1','2','3','4','q','w','e','a','s','d'].includes(l)) fIdx = 2;
+      else if (['5','6','7','8','r','t','y','u','f','g','h','j'].includes(l)) fIdx = 1;
+      out.push({ mods: [], code: l, finger: fIdx, label: ch.toUpperCase() });
+    }
+    i++;
+  }
+  return out;
+}
+
+let steps=[],index=0,running=false,active=[],stepT=0,dwell=0,lastTime=performance.now();
+
+function beginStep(){
+  const st=steps[index];
+  down.clear();
+  
+  let kf = st.finger !== undefined ? st.finger : 1;
+  const targetCenter = center(st.code);
+  
+  active = [];
+
+  if (st.mods && st.mods.length > 0) {
+    st.mods.forEach(modKey => {
+      const modCenter = center(modKey);
+      active.push({ code: modKey, finger: 4, t: modCenter, label: 'SHIFT', hovered: false, arrived: false });
+    });
+  }
+
+  const ka = { code: st.code, finger: kf, t: targetCenter, label: st.label, hovered: false, arrived: false };
+  active.push(ka);
+  
+  const f = F[kf];
+  const reachDx = ka.t.x - f.rest.x;
+  const reachDy = ka.t.y - f.rest.y;
+
+  let targetAngle = Math.max(-0.45, Math.min(0.2, reachDx * 0.002));
+  let moveX = Math.max(-80, Math.min(220, reachDx * 0.45));
+  let moveY = Math.max(-60, Math.min(60, reachDy * 0.3));
+
+  if (st.rotateCCW) {
+    const keyNum = parseInt(st.code);
+    const scale = (keyNum - 4) * 0.15; 
+    targetAngle = -0.55 - scale; 
+    moveX += 90 + (keyNum - 4) * 25;
+    moveY -= 25;
+  }
+
+  if (st.rotateCW) {
+    targetAngle = 0.55; 
+    moveX += 140;
+    moveY += 20;
+  }
+
+  hand.goalAngle = targetAngle;
+  hand.goal = { x: moveX, y: moveY };
+  
+  stepT=0; dwell=0;
+  currentEl.textContent = (st.mods.length ? '[SHIFT + ] ' : '') + st.label + ' (' + (keyMap[st.code].subLabel || keyMap[st.code].label) + ') · ' + fingerNames[kf].toUpperCase();
+}
+
+function finish(msg){
+  running=false;down.clear();active=[];hand.goal={x:0,y:0};hand.goalAngle=0;
+  currentEl.textContent=msg;
+}
+
+function update(dt){
+  const speed=Math.max(.0001,Number(speedEl.value)||1),rate=7.5*speed,e=Math.min(1,dt*rate);
+  hand.off.x+=(hand.goal.x-hand.off.x)*e;hand.off.y+=(hand.goal.y-hand.off.y)*e;
+  hand.angle+=(hand.goalAngle-hand.angle)*e;
+
+  F.forEach((f,i)=>{
+    const a=active.find(x=>x.finger===i);
+    let w = a ? a.t : { x: f.rest.x + hand.off.x, y: f.rest.y + hand.off.y };
+    
+    const s=Math.min(1,dt*rate*2.2);
+    f.tip.x+=(w.x-f.tip.x)*s;f.tip.y+=(w.y-f.tip.y)*s;
+    
+    if (a) {
+      const horizontalDist = Math.hypot(f.tip.x - a.t.x, f.tip.y - a.t.y);
+      if (horizontalDist < 18) {
+        a.hovered = true;
+      }
+      f.heightOffset += ((a.hovered ? (a.arrived ? 0 : 8) : 22) - f.heightOffset) * e * 2;
+    } else {
+      f.heightOffset += (12 - f.heightOffset) * e;
+    }
+
+    solvePlanar(f,f.tip,i);
+  });
+
+  applyCrossGuards();
+  
+  if(!active.length)return;
+  stepT+=dt*speed;
+  
+  active.forEach(a=>{
+    const p=F[a.finger].pts[F[a.finger].pts.length-1];
+    const distToCenter = Math.hypot(p.x - a.t.x, p.y - a.t.y);
+    
+    if(a.hovered && !a.arrived && distToCenter <= 12.0){
+      a.arrived = true;
+      down.add(a.code);
+    }
+  });
+  
+  if(running && active.every(a=>a.arrived)){
+    dwell+=dt*speed;
+    if(dwell > 0.18){
+      index++;
+      if(index >= steps.length) finish('Finished');
+      else beginStep();
+    }
+  }
+}
+
+function rr(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r)}
+
+function drawKeyboard(){
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,.38)';ctx.shadowBlur=24;
+  ctx.fillStyle='#141b24';rr(keyboardX-14,keyboardY-14,840,335,16);ctx.fill();
+  ctx.shadowBlur=0;
+
+  drawKeyList.forEach(p=>{
+    const isPressed = down.has(p.key);
+    
+    if(isPressed) {
+      ctx.fillStyle='#3b82f6';
+      ctx.shadowColor='#60a5fa';
+      ctx.shadowBlur=12;
+    } else {
+      ctx.fillStyle='#293442';
+      ctx.shadowBlur=0;
+    }
+    
+    rr(p.x,p.y,p.w,p.h,6);ctx.fill();
+    ctx.shadowBlur=0;
+    
+    ctx.strokeStyle=isPressed?'#93c5fd':'#39485a';
+    ctx.lineWidth=isPressed?2:1.5;
+    ctx.stroke();
+
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    
+    if (p.subLabel) {
+      ctx.fillStyle=isPressed?'#ffffff':'#91a0b3';
+      ctx.font='10px system-ui';
+      ctx.fillText(p.label, p.x + p.w/2, p.y + p.h*0.7);
+
+      ctx.fillStyle=isPressed?'#ffffff':'#60a5fa';
+      ctx.font='bold 11px system-ui';
+      ctx.fillText(p.subLabel, p.x + p.w/2, p.y + p.h*0.3);
+    } else {
+      ctx.fillStyle=isPressed?'#ffffff':'#aebccc';
+      ctx.font=(p.label.length>5?'10px':'13px')+' system-ui';
+      ctx.font = isPressed ? 'bold ' + ctx.font : ctx.font;
+      ctx.fillText(p.label, p.x + p.w/2, p.y + p.h/2);
+    }
+  });
+  ctx.restore();
+}
+
+function drawFingerContour(pts, width, color, fillColor, isAlpha = 1.0) {
+  ctx.save();
+  ctx.globalAlpha = isAlpha;
+  ctx.fillStyle = fillColor;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.8;
+
+  for (let j = 0; j < pts.length - 1; j++) {
+    const p1 = pts[j];
+    const p2 = pts[j + 1];
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+
+    const w1 = width * (1 - j * 0.12) / 2;
+    const w2 = width * (1 - (j + 1) * 0.12) / 2;
+
+    ctx.beginPath();
+    ctx.moveTo(p1.x + nx * w1, p1.y + ny * w1);
+    ctx.lineTo(p2.x + nx * w2, p2.y + ny * w2);
+    ctx.lineTo(p2.x - nx * w2, p2.y - ny * w2);
+    ctx.lineTo(p1.x - nx * w1, p1.y - ny * w1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  pts.forEach((p, j) => {
+    const r = (width / 2) * (1 - j * 0.1) + 1;
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#0e141c';
+    ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.restore();
+}
+
+function drawLeftHand(){
+  ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
+  
+  const bP = F.map(f=>getRigidBase(f));
+
+  ctx.beginPath();
+  const wristLeft = { x: 135 + hand.off.x, y: 730 + hand.off.y };
+  const wristRight = { x: 295 + hand.off.x, y: 730 + hand.off.y };
+  
+  ctx.moveTo(wristLeft.x, wristLeft.y);
+  ctx.lineTo(bP[4].x - 12, bP[4].y + 12);
+  ctx.lineTo(bP[4].x - 8, bP[4].y - 6);
+  ctx.lineTo(bP[3].x - 6, bP[3].y - 8);
+  ctx.lineTo(bP[2].x, bP[2].y - 12);
+  ctx.lineTo(bP[1].x + 8, bP[1].y - 10);
+  ctx.lineTo(bP[0].x + 12, bP[0].y - 18);
+  ctx.lineTo(bP[0].x + 20, bP[0].y + 22);
+  ctx.lineTo(wristRight.x, wristRight.y);
+  ctx.closePath();
+
+  ctx.fillStyle = 'rgba(23, 31, 42, 0.85)';
+  ctx.strokeStyle = '#38485c';
+  ctx.lineWidth = 3;
+  ctx.fill(); ctx.stroke();
+
+  ctx.strokeStyle='#2e3d4e'; ctx.lineWidth=3;
+  ctx.beginPath();
+  ctx.moveTo(bP[4].x, bP[4].y);
+  ctx.lineTo(bP[3].x, bP[3].y);
+  ctx.lineTo(bP[2].x, bP[2].y);
+  ctx.lineTo(bP[1].x, bP[1].y);
+  ctx.stroke();
+
+  [0,4,3,2,1].forEach(i=>{
+    drawFingerContour(F[i].pts, F[i].w, fingerColors[i], fingerFillColors[i]);
+  });
+
+  ctx.fillStyle='#7e8da0';ctx.font='12px system-ui';ctx.textAlign='left';
+  ctx.fillText('TOP VIEW · ALIGNED MCP KNUCKLE ARCH',keyboardX,750);
+  ctx.restore();
+}
+
+function solveSideIK(L, mcp, targetTip) {
+  const L1 = L[0], L2 = L[1] + (L[2] || 0); 
+  const dx = targetTip.x - mcp.x;
+  const dy = targetTip.y - mcp.y;
+  const dist = Math.max(10, Math.min(L1 + L2 - 1, Math.hypot(dx, dy)));
+  
+  const baseAngle = Math.atan2(dy, dx);
+  const cosAngle1 = (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist);
+  const angle1 = baseAngle - Math.acos(Math.max(-1, Math.min(1, cosAngle1)));
+  
+  const pip = {
+    x: mcp.x + Math.cos(angle1) * L1,
+    y: mcp.y + Math.sin(angle1) * L1
+  };
+  
+  const dx2 = targetTip.x - pip.x;
+  const dy2 = targetTip.y - pip.y;
+  const angle2 = Math.atan2(dy2, dx2);
+  
+  const dip = {
+    x: pip.x + Math.cos(angle2) * L[1],
+    y: pip.y + Math.sin(angle2) * L[1]
+  };
+  
+  const tip = {
+    x: targetTip.x,
+    y: targetTip.y
+  };
+
+  return [mcp, pip, dip, tip];
+}
+
+function drawSideView(){
+  const px=890, py=100, pw=470, ph=340;
+  ctx.save();
+  ctx.fillStyle='#141b24';
+  rr(px,py,pw,ph,16); ctx.fill();
+  ctx.strokeStyle='#283342'; ctx.lineWidth=1.5; ctx.stroke();
+  
+  ctx.fillStyle='#7e8da0'; ctx.font='12px system-ui'; ctx.textAlign='left';
+  ctx.fillText('SIDE VIEW · RIGID SEGMENT JOINT FLEXION', px+20, py+25);
+  
+  const kBedPressedY = py + 265;
+  const kBedRestY    = py + 235;
+
+  ctx.strokeStyle='#39485a'; ctx.lineWidth=1.5; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(px+30, kBedRestY); ctx.lineTo(px+pw-30, kBedRestY); ctx.stroke();
+  ctx.strokeStyle='#2b3b50'; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(px+30, kBedPressedY); ctx.lineTo(px+pw-30, kBedPressedY); ctx.stroke();
+  
+  const wristX = px + 80 + hand.off.y*0.2; 
+  const wristY = kBedRestY - 65 - hand.off.x*0.1;
+  
+  [4,3,2,1].forEach(i=>{
+    const f = F[i];
+    const isAct = active.some(a=>a.finger===i);
+    const isPressed = isAct && active.find(a=>a.finger===i).arrived;
+    
+    const mcpX = wristX + 35 + (i === 1 || i === 2 ? 10 : (4 - i) * 6);
+    const mcpY = wristY - 10 + (i === 1 || i === 2 ? -2 : (3 - i) * 5);
+    
+    const targetTipY = isPressed ? kBedPressedY : (kBedRestY - f.heightOffset);
+    const reachOffset = (f.tip.x - f.rest.x) * 0.45;
+    const targetTipX = mcpX + f.sum * 0.6 + reachOffset;
+
+    const sideJoints = solveSideIK(f.L, { x: mcpX, y: mcpY }, { x: targetTipX, y: targetTipY });
+    
+    drawFingerContour(sideJoints, f.w * 0.8, fingerColors[i], fingerFillColors[i], isAct ? 1.0 : 0.6);
+  });
+
+  const thumb = F[0];
+  const isThumbAct = active.some(a=>a.finger===0);
+  const isThumbPressed = isThumbAct && active.find(a=>a.finger===0).arrived;
+  const cmcX = wristX + 25;
+  const cmcY = wristY + 12;
+  const thumbTipY = isThumbPressed ? kBedPressedY : (kBedRestY - thumb.heightOffset - 8);
+  const thumbReachX = (thumb.tip.x - thumb.rest.x) * 0.45;
+  const thumbTipX = cmcX + thumb.sum * 0.65 + thumbReachX;
+
+  const mcpX = cmcX + thumb.L[0] * 0.55;
+  const mcpY = cmcY - 12;
+
+  const thumbJoints = [
+    { x: cmcX, y: cmcY },
+    { x: mcpX, y: mcpY },
+    { x: thumbTipX, y: thumbTipY }
+  ];
+  drawFingerContour(thumbJoints, thumb.w * 0.85, fingerColors[0], fingerFillColors[0], isThumbAct ? 1.0 : 0.75);
+
+  ctx.restore();
+}
+
+function drawFrontView(){
+  const px=890, py=460, pw=470, ph=340;
+  ctx.save();
+  ctx.fillStyle='#141b24';
+  rr(px,py,pw,ph,16); ctx.fill();
+  ctx.strokeStyle='#283342'; ctx.lineWidth=1.5; ctx.stroke();
+  
+  ctx.fillStyle='#7e8da0'; ctx.font='12px system-ui'; ctx.textAlign='left';
+  ctx.fillText('FRONT VIEW · UNIFIED WRIST & KNUCKLE ROTATION', px+20, py+25);
+  
+  const kBedPressedY = py + 265;
+  const kBedRestY    = py + 235;
+
+  ctx.strokeStyle='#39485a'; ctx.lineWidth=1.5; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(px+30, kBedRestY); ctx.lineTo(px+pw-30, kBedRestY); ctx.stroke();
+  ctx.strokeStyle='#2b3b50'; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(px+30, kBedPressedY); ctx.lineTo(px+pw-30, kBedPressedY); ctx.stroke();
+
+  const centerX = px + pw / 2 + hand.off.x * 0.4;
+  const wristCenterY = kBedRestY - 80;
+  const rollAngle = hand.angle * 0.8;
+  
+  const wristWidth = 135;
+  const wLeft = {
+    x: centerX - (wristWidth/2) * Math.cos(rollAngle),
+    y: wristCenterY - (wristWidth/2) * Math.sin(rollAngle)
+  };
+  const wRight = {
+    x: centerX + (wristWidth/2) * Math.cos(rollAngle),
+    y: wristCenterY + (wristWidth/2) * Math.sin(rollAngle)
+  };
+  
+  ctx.strokeStyle='#586c84'; ctx.lineWidth=6;
+  ctx.beginPath(); ctx.moveTo(wLeft.x, wLeft.y); ctx.lineTo(wRight.x, wRight.y); ctx.stroke();
+  
+  const slotSpacing = 36;
+
+  [4,3,2,1].forEach((i)=>{
+    const f = F[i];
+    const isAct = active.some(a=>a.finger===i);
+    const isPressed = isAct && active.find(a=>a.finger===i).arrived;
+
+    const slotOffset = (3 - (i - 1)) * slotSpacing - 55;
+    const mcpX = centerX + slotOffset * Math.cos(rollAngle);
+    const mcpY = (wristCenterY - 15) + slotOffset * Math.sin(rollAngle);
+    
+    const reachOffset = (f.tip.x - f.rest.x) * 0.3;
+    const tipX = mcpX + reachOffset;
+    const tipY = isPressed ? kBedPressedY : (kBedRestY - f.heightOffset);
+    
+    const frontPts = f.pts.map((p, jIdx) => {
+      const totalP = f.pts.length - 1;
+      const progress = jIdx / totalP;
+      
+      const archHeight = Math.sin(progress * Math.PI) * (isAct ? 12 : 22);
+      const x = mcpX + progress * (tipX - mcpX);
+      const y = mcpY + progress * (tipY - mcpY) - archHeight;
+      
+      return { x, y };
+    });
+    
+    drawFingerContour(frontPts, f.w * 0.75, fingerColors[i], fingerFillColors[i], isAct ? 1.0 : 0.65);
+  });
+
+  const isThumbAct = active.some(a=>a.finger===0);
+  const isThumbPressed = isThumbAct && active.find(a=>a.finger===0).arrived;
+
+  const cmcX = wRight.x - 10 * Math.cos(rollAngle);
+  const cmcY = wRight.y - 10 * Math.sin(rollAngle);
+  const mcpX = cmcX + 30 * Math.cos(rollAngle);
+  const mcpY = cmcY - 18 + 30 * Math.sin(rollAngle);
+  
+  const thumbReachX = isThumbAct ? (F[0].tip.x - F[0].rest.x) * 0.4 : 0;
+  const thumbTipX = mcpX + 26 + thumbReachX;
+  const thumbTipY = isThumbPressed ? kBedPressedY : (kBedRestY - F[0].heightOffset);
+  
+  const ipX = (mcpX + thumbTipX) / 2 + 5;
+  const ipY = (mcpY + thumbTipY) / 2 - 10;
+  
+  const thumbJoints = [
+    { x: cmcX, y: cmcY },
+    { x: mcpX, y: mcpY },
+    { x: ipX, y: ipY },
+    { x: thumbTipX, y: thumbTipY }
+  ];
+  
+  drawFingerContour(thumbJoints, F[0].w * 0.75, fingerColors[0], fingerFillColors[0], isThumbAct ? 1.0 : 0.75);
+
+  ctx.restore();
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#111821';ctx.fillRect(0,0,W,H);
+  drawKeyboard();
+  drawLeftHand();
+  drawSideView();
+  drawFrontView();
+}
+
+function loop(now){
+  const dt=Math.min(0.05,(now-lastTime)/1000);
+  lastTime=now;
+  update(dt);draw();requestAnimationFrame(loop);
+}
+
+document.getElementById('play').onclick=()=>{
+  steps=parseSequence(textEl.value);
+  if(!steps.length){currentEl.textContent='Nothing to play';return}
+  index=0;running=true;down.clear();active=[];beginStep();
+};
+document.getElementById('stop').onclick=()=>finish('Stopped');
+document.getElementById('reset').onclick=()=>{
+  finish('Ready');index=0;
+  hand.off={x:0,y:0};hand.angle=0;hand.goalAngle=0;
+  F.forEach(f=>{f.tip={...f.rest};for(let i=0;i<20;i++)solvePlanar(f,f.rest,i)});
+};
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
