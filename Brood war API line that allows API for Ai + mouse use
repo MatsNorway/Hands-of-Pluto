@@ -1,0 +1,5 @@
+
+void ExampleAIModule::onStart()
+{
+    BWAPI::Broodwar->enableFlag(BWAPI::Flag::UserInput);
+}
